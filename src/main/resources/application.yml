@@ -1,0 +1,19 @@
+spring:
+  application:
+    name: cardbot
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/cardbot}
+    username: ${DB_USERNAME:postgres}
+    password: ${DB_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+  flyway:
+    enabled: true
+
+# Токен бота (задаётся через BOT_TOKEN или telegram.bot.token)
+telegram:
+  bot:
+    token: ${BOT_TOKEN:}

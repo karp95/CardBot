@@ -1,0 +1,17 @@
+# Тестовый токен (не подключается к реальному Telegram)
+telegram:
+  bot:
+    token: 123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    hibernate:
+      ddl-auto: create-drop
+    database-platform: org.hibernate.dialect.H2Dialect
+  flyway:
+    enabled: false
