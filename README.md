@@ -52,7 +52,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Подробнее: [INSTRUCTIONS.md](INSTRUCTIONS.md) · [DEPLOYMENT.md](DEPLOYMENT.md)
+Подробнее: [INSTRUCTIONS.md](INSTRUCTIONS.md) · [scripts/README.md](scripts/README.md) — загрузка слов на сервере
 
 ---
 

@@ -1,3 +1,4 @@
+# Запуск с пересборкой: ./run.sh  или  docker compose up -d --build
 services:
   postgres:
     image: postgres:16
@@ -16,17 +17,30 @@ services:
       timeout: 5s
       retries: 5
 
+
   cardbot:
-    build: .
+    build:
+      context: .
+      no_cache: true
     container_name: cardbot
     depends_on:
       postgres:
         condition: service_healthy
     env_file: .env
     environment:
+      # Для Spring Boot
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/cardbot
+      SPRING_DATASOURCE_USERNAME: postgres
+      SPRING_DATASOURCE_PASSWORD: postgres
+
+      # Для совместимости (если код использует старые имена)
       DB_URL: jdbc:postgresql://postgres:5432/cardbot
       DB_USERNAME: postgres
       DB_PASSWORD: postgres
+
+      # Чтобы Flyway не падал, если база уже есть
+      SPRING_FLYWAY_BASELINE_ON_MIGRATE: true
+      SPRING_FLYWAY_BASELINE_VERSION: 0
     restart: unless-stopped
 
 volumes:

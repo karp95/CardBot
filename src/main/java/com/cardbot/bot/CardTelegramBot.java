@@ -8,9 +8,11 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
+import org.telegram.telegrambots.meta.api.methods.commands.SetMyCommands;
 import org.telegram.telegrambots.meta.api.methods.send.SendMessage;
 import org.telegram.telegrambots.meta.api.methods.updatingmessages.EditMessageText;
 import org.telegram.telegrambots.meta.api.objects.Update;
+import org.telegram.telegrambots.meta.api.objects.commands.BotCommand;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
@@ -22,6 +24,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
+
+import jakarta.annotation.PostConstruct;
 
 @Slf4j
 @Component
@@ -61,6 +65,7 @@ public class CardTelegramBot extends TelegramLongPollingBot {
     private static final String CB_MOVE_TO = "MOVETO:";
 
     private static final String CB_ADD_SET = "ADD_SET";
+    private static final String CB_ADD_DEFAULTS = "ADD_DEFAULTS";
     private static final String CB_DEL_SET = "DELSET:";
     private static final String CB_DEL_SET_YES = "DELSETYES:";
     private static final String CB_DEL_SET_NO = "DELSETNO";
@@ -77,6 +82,7 @@ public class CardTelegramBot extends TelegramLongPollingBot {
     private final CardSetService cardSetService;
     private final LearningService learningService;
     private final StatsService statsService;
+    private final DefaultTopicsService defaultTopicsService;
 
     private final Map<Long, UserState> userState = new ConcurrentHashMap<>();
     private final Map<Long, LearningSession> learningSession = new ConcurrentHashMap<>();
@@ -86,13 +92,35 @@ public class CardTelegramBot extends TelegramLongPollingBot {
                           CardService cardService,
                           CardSetService cardSetService,
                           LearningService learningService,
-                          StatsService statsService) {
+                          StatsService statsService,
+                          DefaultTopicsService defaultTopicsService) {
         super(botToken);
         this.userService = userService;
         this.cardService = cardService;
         this.cardSetService = cardSetService;
         this.learningService = learningService;
         this.statsService = statsService;
+        this.defaultTopicsService = defaultTopicsService;
+    }
+
+    @PostConstruct
+    public void registerMenuCommands() {
+        try {
+            List<BotCommand> commands = List.of(
+                    new BotCommand("start", "Начать / главное меню"),
+                    new BotCommand("add", "Добавить карточку или группу"),
+                    new BotCommand("learn", "Начать обучение"),
+                    new BotCommand("list", "Список карточек"),
+                    new BotCommand("sets", "Управление наборами"),
+                    new BotCommand("stats", "Статистика"),
+                    new BotCommand("help", "Справка"),
+                    new BotCommand("cancel", "Отменить действие")
+            );
+            execute(new SetMyCommands(commands, null, null));
+            log.info("Меню команд зарегистрировано");
+        } catch (TelegramApiException e) {
+            log.warn("Не удалось зарегистрировать меню команд: {}", e.getMessage());
+        }
     }
 
     @Override
@@ -221,8 +249,7 @@ public class CardTelegramBot extends TelegramLongPollingBot {
                 : (from.getUserName() != null ? from.getUserName() : "друг");
         String msg = "Привет, " + name + "! 👋\n\nЯ бот для изучения английских слов.\n\n" +
                 "Команды:\n" +
-                "/add слово — перевод — добавить карточку\n" +
-                "/add набор: слово — перевод — добавить в набор\n" +
+                "/add — добавить карточку или группу (слово — перевод, каждая строка — карточка)\n" +
                 "/learn — начать обучение\n" +
                 "/list — список карточек\n" +
                 "/sets — управление наборами\n" +
@@ -245,9 +272,14 @@ public class CardTelegramBot extends TelegramLongPollingBot {
         if (input.isEmpty()) {
             userState.put(user.getId(), UserState.addingCard());
             sendText(chatId.toString(), "Введите карточку: слово — перевод\n\n" +
-                    "Пример: apple — яблоко\n" +
-                    "Пример: животные: dog — собака\n\n" +
-                    "Или /cancel для отмены.");
+                    "Одна карточка:\n" +
+                    "• apple — яблоко\n" +
+                    "• животные: dog — собака\n\n" +
+                    "Группа (на каждую строку — карточка):\n" +
+                    "• apple — яблоко\n" +
+                    "• dog — собака\n" +
+                    "• животные: cat — кошка\n\n" +
+                    "/cancel — отмена");
             return;
         }
         addCardFromInput(chatId, user, input);
@@ -263,12 +295,29 @@ public class CardTelegramBot extends TelegramLongPollingBot {
             sendText(chatId.toString(), "Пустой ввод. Попробуйте снова или /cancel");
             return;
         }
-        try {
-            Card card = cardService.createFromInput(user, input, cardSetService);
-            String setInfo = card.getCardSet() != null ? " (набор «" + card.getCardSet().getName() + "»)" : "";
-            sendText(chatId.toString(), "Карточка добавлена" + setInfo + ": " + card.getWord() + " — " + card.getTranslation());
-        } catch (IllegalArgumentException e) {
-            sendText(chatId.toString(), e.getMessage());
+        boolean isBulk = input.contains("\n") || input.contains("\r");
+        if (isBulk) {
+            try {
+                var result = cardService.createBulkFromInput(user, input, cardSetService);
+                String msg = "✅ Добавлено карточек: " + result.added();
+                if (!result.errors().isEmpty()) {
+                    msg += "\n❌ Ошибки (" + result.errors().size() + "):\n" + String.join("\n", result.errors().stream().limit(5).toList());
+                    if (result.errors().size() > 5) {
+                        msg += "\n... и ещё " + (result.errors().size() - 5);
+                    }
+                }
+                sendText(chatId.toString(), msg);
+            } catch (Exception e) {
+                sendText(chatId.toString(), "Ошибка: " + e.getMessage());
+            }
+        } else {
+            try {
+                Card card = cardService.createFromInput(user, input, cardSetService);
+                String setInfo = card.getCardSet() != null ? " (набор «" + card.getCardSet().getName() + "»)" : "";
+                sendText(chatId.toString(), "Карточка добавлена" + setInfo + ": " + card.getWord() + " — " + card.getTranslation());
+            } catch (IllegalArgumentException e) {
+                sendText(chatId.toString(), e.getMessage());
+            }
         }
     }
 
@@ -310,28 +359,38 @@ public class CardTelegramBot extends TelegramLongPollingBot {
     private void showLearnModeChoice(Long chatId, User user, String setChoice) {
         var keyboard = new java.util.ArrayList<List<InlineKeyboardButton>>();
         keyboard.add(List.of(
-                InlineKeyboardButton.builder().text("EN→RU Случайно").callbackData(CB_LEARN_MODE + setChoice + ":EN_RU:RANDOM:").build(),
-                InlineKeyboardButton.builder().text("EN→RU По порядку").callbackData(CB_LEARN_MODE + setChoice + ":EN_RU:SEQ:").build()
+                InlineKeyboardButton.builder()
+                        .text("🔄 Повторение EN→RU")
+                        .callbackData(CB_LEARN_MODE + setChoice + ":EN_RU:RANDOM:")
+                        .build()
         ));
         keyboard.add(List.of(
-                InlineKeyboardButton.builder().text("RU→EN Случайно").callbackData(CB_LEARN_MODE + setChoice + ":RU_EN:RANDOM:").build(),
-                InlineKeyboardButton.builder().text("RU→EN По порядку").callbackData(CB_LEARN_MODE + setChoice + ":RU_EN:SEQ:").build()
+                InlineKeyboardButton.builder()
+                        .text("🔄 Повторение RU→EN")
+                        .callbackData(CB_LEARN_MODE + setChoice + ":RU_EN:RANDOM:")
+                        .build()
         ));
         keyboard.add(List.of(
-                InlineKeyboardButton.builder().text("Цель: 10 карточек").callbackData(CB_LEARN_MODE + setChoice + ":EN_RU:RANDOM:10").build()
+                InlineKeyboardButton.builder()
+                        .text("✏️ Ввести слово RU→EN")
+                        .callbackData(CB_LEARN_INPUT + setChoice + ":RU_EN:")
+                        .build()
         ));
         keyboard.add(List.of(
-                InlineKeyboardButton.builder().text("✏️ Своё слово (RU→EN)").callbackData(CB_LEARN_INPUT + setChoice + ":RU_EN:").build(),
-                InlineKeyboardButton.builder().text("✏️ Своё слово (EN→RU)").callbackData(CB_LEARN_INPUT + setChoice + ":EN_RU:").build()
-        ));
-        keyboard.add(List.of(
-                InlineKeyboardButton.builder().text("✏️ Своё слово (RU→EN) — 10 карт").callbackData(CB_LEARN_INPUT + setChoice + ":RU_EN:10").build(),
-                InlineKeyboardButton.builder().text("✏️ Своё слово (EN→RU) — 10 карт").callbackData(CB_LEARN_INPUT + setChoice + ":EN_RU:10").build()
+                InlineKeyboardButton.builder()
+                        .text("✏️ Ввести слово EN→RU")
+                        .callbackData(CB_LEARN_INPUT + setChoice + ":EN_RU:")
+                        .build()
         ));
         try {
             execute(SendMessage.builder()
                     .chatId(chatId.toString())
-                    .text("Выберите режим:")
+                    .text("Выберите режим:\n\n" +
+                            "1️⃣ *Повторение EN→RU* — английское слово, кнопка «Показать перевод»\n" +
+                            "2️⃣ *Повторение RU→EN* — русское слово, кнопка «Показать слово»\n" +
+                            "3️⃣ *Ввести слово RU→EN* — русское слово → ввести английское\n" +
+                            "4️⃣ *Ввести слово EN→RU* — английское слово → ввести перевод")
+                    .parseMode("Markdown")
                     .replyMarkup(InlineKeyboardMarkup.builder().keyboard(keyboard).build())
                     .build());
         } catch (TelegramApiException e) {
@@ -897,6 +956,20 @@ public class CardTelegramBot extends TelegramLongPollingBot {
         } else if (CB_ADD_SET.equals(data)) {
             userState.put(user.getId(), UserState.addingSet());
             sendText(chatId.toString(), "Введите название набора (например: Животные, Отпуск). Или /cancel для отмены.");
+        } else if (CB_ADD_DEFAULTS.equals(data)) {
+            int added = defaultTopicsService.createDefaultSetsForUser(user);
+            String msg = added > 0
+                    ? "✅ Добавлено " + added + " стандартных наборов:\nЖивотные, Еда и напитки, Семья, Дом, Цвета, Путешествия, Работа, Природа"
+                    : "Все стандартные наборы уже добавлены.";
+            try {
+                execute(EditMessageText.builder()
+                        .chatId(chatId.toString())
+                        .messageId(messageId)
+                        .text(msg)
+                        .build());
+            } catch (TelegramApiException e) {
+                log.error("Ошибка", e);
+            }
         } else if (data.startsWith(CB_DEL_SET)) {
             Long setId = Long.parseLong(data.substring(CB_DEL_SET.length()));
             cardSetService.findByIdAndUserId(setId, user.getId()).ifPresent(set -> {
@@ -1011,6 +1084,7 @@ public class CardTelegramBot extends TelegramLongPollingBot {
 
         var keyboard = new java.util.ArrayList<List<InlineKeyboardButton>>();
         keyboard.add(List.of(InlineKeyboardButton.builder().text("➕ Создать набор").callbackData(CB_ADD_SET).build()));
+        keyboard.add(List.of(InlineKeyboardButton.builder().text("📥 Добавить стандартные наборы").callbackData(CB_ADD_DEFAULTS).build()));
         for (var set : sets) {
             keyboard.add(List.of(
                     InlineKeyboardButton.builder().text("📁 " + set.getName()).callbackData("LIST_SET:" + set.getId()).build(),
@@ -1180,14 +1254,14 @@ public class CardTelegramBot extends TelegramLongPollingBot {
         String msg = """
             📖 Справка по боту
 
-            ➕ Добавить — добавить новую карточку.
+            ➕ Добавить — добавить карточку или группу.
             Нажмите кнопку, затем введите:
-            • слово — перевод (например: apple — яблоко)
-            • набор: слово — перевод (например: животные: dog — собака)
-            • несколько вариантов: слово — перевод1|перевод2 (например: go — идти|ходить)
+            • слово — перевод (apple — яблоко)
+            • набор: слово — перевод (животные: dog — собака)
+            • Группа: каждая строка — карточка (можно смешивать форматы)
 
             📚 Учить — начать изучение слов.
-            Выберите набор, затем режим: EN→RU / RU→EN (случайно или по порядку), цель на сессию или «Своё слово» — показ русского, ввод английского (регистр не учитывается).
+            Выберите набор (или все карточки), затем режим: Повторение EN→RU/RU→EN или Ввести слово RU→EN/EN→RU.
 
             📋 Список — просмотр карточек.
             Выберите набор, чтобы увидеть карточки. Можно редактировать (✏️), перемещать в набор (📁) и удалять (🗑).

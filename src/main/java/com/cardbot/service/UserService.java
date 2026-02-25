@@ -11,6 +11,7 @@ import org.springframework.transaction.annotation.Transactional;
 public class UserService {
 
     private final UserRepository userRepository;
+    private final DefaultTopicsService defaultTopicsService;
 
     @Transactional
     public User getOrCreate(Long telegramId, String username) {
@@ -20,7 +21,9 @@ public class UserService {
                             .telegramId(telegramId)
                             .username(username)
                             .build();
-                    return userRepository.save(user);
+                    user = userRepository.save(user);
+                    defaultTopicsService.createDefaultSetsForUser(user);
+                    return user;
                 });
     }
 }

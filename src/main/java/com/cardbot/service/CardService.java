@@ -100,6 +100,35 @@ public class CardService {
         return create(user, set, parsed.word(), parsed.translation(), parsed.transcription());
     }
 
+    /**
+     * Массовая загрузка карточек. Каждая строка — одна карточка.
+     * Формат строки: "слово — перевод" или "набор: слово — перевод".
+     */
+    @Transactional
+    public BulkAddResult createBulkFromInput(User user, String input, CardSetService cardSetService) {
+        if (input == null || input.isBlank()) {
+            return new BulkAddResult(0, 0, List.of());
+        }
+        String[] lines = input.split("\\r?\\n");
+        int added = 0;
+        List<String> errors = new java.util.ArrayList<>();
+        for (int i = 0; i < lines.length; i++) {
+            String line = lines[i].trim();
+            if (line.isEmpty()) {
+                continue;
+            }
+            try {
+                createFromInput(user, line, cardSetService);
+                added++;
+            } catch (IllegalArgumentException e) {
+                errors.add("Строка " + (i + 1) + ": " + line.substring(0, Math.min(50, line.length())) + (line.length() > 50 ? "…" : ""));
+            }
+        }
+        return new BulkAddResult(added, lines.length, errors);
+    }
+
+    public record BulkAddResult(int added, int totalLines, List<String> errors) {}
+
     public record ParsedCardWithSet(String setName, String word, String translation, String transcription) {}
 
     public Optional<Card> findById(Long id) {
